@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SITRAL · Dashboard analítico</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f6f5; --panel: #ffffff; --ink: #1d2a26; --muted: #5d6b66; --line: #dfe5e2;
+    --brand: #0f6e5c; --brand-ink: #ffffff;
+    --ok: #1f8a4c; --warn: #c27c0e; --crit: #c0392b; --exp: #6b2737; --info: #2f6db3;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink); }
+  header { background: var(--brand); color: var(--brand-ink); padding: 14px 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 19px; margin: 0; font-weight: 650; }
+  header small { opacity: .85; }
+  header .spacer { flex: 1; }
+  main { max-width: 1240px; margin: 0 auto; padding: 20px 16px 48px; display: grid; gap: 18px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .panel h2 { font-size: 16px; margin: 0 0 4px; }
+  .panel p.sub { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .kpi { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .kpi b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .kpi span { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  .chart { position: relative; height: 290px; }
+  button { font: inherit; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
+  button.danger { color: var(--crit); border-color: #e6b8b2; }
+  button:disabled { opacity: .5; cursor: default; }
+  input { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; }
+  .login { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; letter-spacing: .04em; color: #fff; }
+  .CLOSED { background: var(--ok); } .OPEN { background: var(--crit); } .HALF_OPEN { background: var(--warn); }
+  .circuit { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .circuit header { all: unset; display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .circuit .acciones { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  .circuit ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); max-height: 110px; overflow: auto; }
+  .flujo { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .flujo .paso { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
+  .flujo .paso.activo { color: #fff; border-color: transparent; }
+  .msg { font-size: 13px; color: var(--muted); min-height: 1.4em; }
+  .msg.err { color: var(--crit); }
+  details { margin-top: 10px; font-size: 12px; }
+  details pre { white-space: pre-wrap; background: #f1f4f3; padding: 8px; border-radius: 6px; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #eef3f1; color: var(--muted); }
+  .oculto { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>SITRAL · Dashboard analítico</h1>
+    <small>datos.gov.co (INVIMA CUM · DANE DIVIPOLA) + inventario → DuckDB</small>
+  </div>
+  <div class="spacer"></div>
+  <form class="login" id="form-login">
+    <input id="usuario" placeholder="usuario" autocomplete="username" required>
+    <input id="clave" type="password" placeholder="contraseña" autocomplete="current-password" required>
+    <button class="primary" type="submit">Ingresar</button>
+  </form>
+  <div id="sesion" class="oculto"><span id="quien"></span> <button id="salir" type="button">Salir</button></div>
+</header>
+
+<main>
+  <div class="msg" id="msg">Inicie sesión con un usuario ADMINISTRADOR o FARMACEUTA.</div>
+
+  <!-- ===================== CIRCUIT BREAKERS ===================== -->
+  <section class="panel">
+    <h2>Resiliencia de las APIs externas (circuit breaker)</h2>
+    <p class="sub">3 fallos consecutivos → <b>OPEN</b> (las llamadas se rechazan y se sirve la caché) · al vencer el tiempo de
+      recuperación → <b>HALF_OPEN</b> (1 llamada de prueba) · si la prueba funciona → <b>CLOSED</b>. Cada llamada usa reintentos con
+      backoff exponencial.</p>
+    <div class="grid2" id="circuitos"></div>
+  </section>
+
+  <!-- ===================== INVENTARIO ===================== -->
+  <section class="panel">
+    <h2>Consulta 1 · Estadísticas descriptivas del inventario por nivel de vencimiento</h2>
+    <p class="sub">DuckDB: COUNT, SUM, AVG, MEDIAN, STDDEV_SAMP, QUANTILE_CONT sobre los lotes con existencias.</p>
+    <div class="kpis" id="kpis-inv"></div>
+    <div class="grid2">
+      <div class="chart"><canvas id="ch-inv-lotes"></canvas></div>
+      <div class="chart"><canvas id="ch-inv-dias"></canvas></div>
+    </div>
+    <div class="scroll"><table id="tb-inv"></table></div>
+    <details><summary>SQL ejecutado</summary><pre id="sql-inv"></pre></details>
+  </section>
+
+  <!-- ===================== OFERTA MERCADO ===================== -->
+  <section class="panel">
+    <h2>Consulta 2 · Oferta registrada en el INVIMA (CUM) para los principios activos en riesgo</h2>
+    <p class="sub">JSON de datos.gov.co cargado con <code>read_json_auto</code>; presentaciones, titulares y % de registros vigentes por principio activo.</p>
+    <div class="kpis" id="kpis-oferta"></div>
+    <div class="chart"><canvas id="ch-oferta"></canvas></div>
+    <div class="scroll"><table id="tb-oferta"></table></div>
+    <div class="msg" id="origen-oferta"></div>
+    <details><summary>SQL ejecutado</summary><pre id="sql-oferta"></pre></details>
+  </section>
+
+  <!-- ===================== COBERTURA REGIONAL ===================== -->
+  <section class="panel">
+    <h2>Consulta 3 · Inventario por ubicación del proveedor (cruce con DANE DIVIPOLA)</h2>
+    <p class="sub">LEFT JOIN entre el inventario y los municipios del DANE por código DIVIPOLA.</p>
+    <div class="kpis" id="kpis-region"></div>
+    <div class="chart"><canvas id="ch-region"></canvas></div>
+    <div class="scroll"><table id="tb-region"></table></div>
+    <div class="msg" id="origen-region"></div>
+    <details><summary>SQL ejecutado</summary><pre id="sql-region"></pre></details>
+  </section>
+</main>
+
+<script>
+const API = "/api/v1";
+const COLORES = { VENCIDO: "#6b2737", CRITICA: "#c0392b", PREVENTIVA: "#c27c0e", VIGENTE: "#1f8a4c" };
+const ORDEN_NIVEL = ["VENCIDO", "CRITICA", "PREVENTIVA", "VIGENTE"];
+const graficos = {};
+let token = null, rol = null, temporizador = null;
+
+const $ = (id) => document.getElementById(id);
+const num = (v, d = 0) => v == null ? "—" : Number(v).toLocaleString("es-CO", { maximumFractionDigits: d });
+const cop = (v) => v == null ? "—" : "$ " + num(v);
+function guardar(k, v) { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch (_) {} }
+function leer(k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } }
+function mensaje(texto, error = false) { const m = $("msg"); m.textContent = texto; m.className = "msg" + (error ? " err" : ""); }
+
+async function api(ruta, opciones = {}) {
+  const r = await fetch(API + ruta, { ...opciones, headers: { ...(opciones.headers || {}), Authorization: "Bearer " + token } });
+  const cuerpo = await r.json().catch(() => ({}));
+  if (r.status === 401) { cerrarSesion(); throw new Error("La sesión expiró, ingrese de nuevo."); }
+  if (!r.ok) throw new Error(`${r.status} · ${cuerpo.message || r.statusText}`);
+  return cuerpo;
+}
+
+// ------------------------------------------------------------------ sesión
+$("form-login").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const datos = new URLSearchParams({ username: $("usuario").value, password: $("clave").value });
+  const r = await fetch(API + "/auth/login", { method: "POST", body: datos });
+  const cuerpo = await r.json().catch(() => ({}));
+  if (!r.ok) return mensaje(cuerpo.message || "Credenciales inválidas", true);
+  iniciarSesion(cuerpo.access_token, cuerpo.rol, $("usuario").value);
+});
+$("salir").addEventListener("click", cerrarSesion);
+
+function iniciarSesion(t, r, usuario) {
+  token = t; rol = r;
+  guardar("sitral_token", t); guardar("sitral_rol", r); guardar("sitral_usuario", usuario);
+  $("form-login").classList.add("oculto"); $("sesion").classList.remove("oculto");
+  $("quien").textContent = `${usuario} (${r})`;
+  mensaje("Cargando análisis…");
+  cargarTodo();
+  clearInterval(temporizador);
+  temporizador = setInterval(cargarCircuitos, 3000);  // refresca los estados del circuito
+}
+function cerrarSesion() {
+  token = null; clearInterval(temporizador);
+  ["sitral_token", "sitral_rol", "sitral_usuario"].forEach((k) => guardar(k, null));
+  $("form-login").classList.remove("oculto"); $("sesion").classList.add("oculto");
+}
+
+async function cargarTodo() {
+  const tareas = [cargarCircuitos(), cargarInventario(), cargarOferta(), cargarRegion()];
+  const res = await Promise.allSettled(tareas);
+  const fallos = res.filter((x) => x.status === "rejected").map((x) => x.reason.message);
+  mensaje(fallos.length ? "Algunas secciones fallaron: " + fallos.join(" | ") : "Datos actualizados " + new Date().toLocaleTimeString("es-CO"), fallos.length > 0);
+}
+
+// ------------------------------------------------------------------ circuitos
+const PRUEBAS = { invima_cum: "/datos-abiertos/medicamentos?q=acetaminofen&limite=5", dane_divipola: "/datos-abiertos/municipios?cod_departamento=25" };
+const NOMBRES = { invima_cum: "INVIMA · Código Único de Medicamentos", dane_divipola: "DANE · DIVIPOLA (municipios)" };
+
+async function cargarCircuitos() {
+  if (!token) return;
+  const lista = await api("/datos-abiertos/circuitos");
+  $("circuitos").innerHTML = lista.map(tarjetaCircuito).join("");
+}
+
+function tarjetaCircuito(c) {
+  const admin = rol === "ADMINISTRADOR";
+  const pasos = ["CLOSED", "OPEN", "HALF_OPEN"].map((p) => `<span class="paso ${p === c.estado ? "activo " + p : ""}">${p}</span>`).join(" → ");
+  const historial = (c.historial || []).slice().reverse().map((h) =>
+    `<li>${new Date(h.momento).toLocaleTimeString("es-CO")} · ${h.desde} → <b>${h.hacia}</b> · ${h.motivo}</li>`).join("");
+  return `<div class="circuit">
+    <header><span class="badge ${c.estado}">${c.estado}</span><b>${NOMBRES[c.fuente] || c.fuente}</b>
+      <span class="tag">${c.dataset_id}</span></header>
+    <div class="flujo">${pasos}</div>
+    <div style="font-size:13px;margin-top:6px">
+      Fallos consecutivos: <b>${c.fallos_consecutivos}/${c.umbral_fallos}</b> ·
+      llamadas ${c.total_llamadas} · fallidas ${c.total_fallos} · rechazadas ${c.total_rechazadas}
+      ${c.estado === "OPEN" ? ` · HALF_OPEN en <b>${num(c.reintentar_en_s, 0)} s</b>` : ""}
+      ${c.falla_simulada ? ' · <b style="color:var(--crit)">falla simulada activa</b>' : ""}
+    </div>
+    <div class="acciones">
+      <button onclick="probar('${c.fuente}')">Probar llamada</button>
+      ${admin ? `<button class="danger" onclick="simular('${c.fuente}', ${!c.falla_simulada})">${c.falla_simulada ? "Quitar falla" : "Simular caída"}</button>
+      <button onclick="reiniciar('${c.fuente}')">Reiniciar</button>` : '<span class="tag">simular/reiniciar: solo ADMINISTRADOR</span>'}
+    </div>
+    <div class="msg" id="res-${c.fuente}"></div>
+    ${historial ? `<ul>${historial}</ul>` : ""}
+  </div>`;
+}
+
+async function probar(fuente) {
+  const destino = () => $("res-" + fuente);
+  try {
+    const r = await api(PRUEBAS[fuente]);
+    await cargarCircuitos();
+    destino().textContent = `OK · ${r.total} registros · origen: ${r.origen}${r.advertencia ? " · " + r.advertencia : ""}`;
+  } catch (e) {
+    await cargarCircuitos();
+    destino().textContent = e.message; destino().className = "msg err";
+  }
+}
+async function simular(fuente, activar) {
+  await api(`/datos-abiertos/circuitos/${fuente}/simular-falla?activar=${activar}`, { method: "POST" });
+  cargarCircuitos();
+}
+async function reiniciar(fuente) {
+  await api(`/datos-abiertos/circuitos/${fuente}/reiniciar`, { method: "POST" });
+  cargarCircuitos();
+}
+
+// ------------------------------------------------------------------ utilidades de gráficos/tablas
+function grafico(id, config) {
+  graficos[id]?.destroy();
+  graficos[id] = new Chart($(id), { ...config, options: { responsive: true, maintainAspectRatio: false, ...(config.options || {}) } });
+}
+function tabla(id, filas, columnas) {
+  if (!filas.length) { $(id).innerHTML = "<tr><td>Sin datos</td></tr>"; return; }
+  $(id).innerHTML = "<tr>" + columnas.map(([, t]) => `<th>${t}</th>`).join("") + "</tr>" +
+    filas.map((f) => "<tr>" + columnas.map(([k, , fmt]) => `<td>${fmt ? fmt(f[k]) : (f[k] ?? "—")}</td>`).join("") + "</tr>").join("");
+}
+function kpis(id, items) {
+  $(id).innerHTML = items.map(([t, v]) => `<div class="kpi"><b>${v}</b><span>${t}</span></div>`).join("");
+}
+function sql(id, obj) { $(id).textContent = Object.entries(obj || {}).map(([k, v]) => `-- ${k}\n${v}`).join("\n\n"); }
+
+// ------------------------------------------------------------------ consulta 1: inventario
+async function cargarInventario() {
+  const d = await api("/analitica/inventario");
+  const filas = d.filas.slice().sort((a, b) => ORDEN_NIVEL.indexOf(a.nivel) - ORDEN_NIVEL.indexOf(b.nivel));
+  const r = d.resumen || {};
+  kpis("kpis-inv", [["Lotes con existencias", num(r.lotes)], ["Unidades", num(r.unidades)],
+    ["Media / mediana unid. por lote", `${num(r.media_unidades_por_lote, 1)} / ${num(r.mediana_unidades_por_lote, 1)}`],
+    ["Desv. estándar unidades", num(r.desviacion_unidades, 1)], ["Valor del inventario", cop(r.valor_total_cop)],
+    ["Valor en riesgo (crítico + vencido)", cop(r.valor_en_riesgo_cop)], ["Pérdida por vencidos", cop(r.perdida_vencidos_cop)]]);
+  grafico("ch-inv-lotes", { type: "bar", data: { labels: filas.map((f) => f.nivel), datasets: [
+      { label: "Lotes", data: filas.map((f) => f.lotes), backgroundColor: filas.map((f) => COLORES[f.nivel]) }] },
+    options: { plugins: { legend: { display: false }, title: { display: true, text: "Lotes por nivel de alerta" } } } });
+  grafico("ch-inv-dias", { type: "bar", data: { labels: filas.map((f) => f.nivel), datasets: [
+      { label: "P25", data: filas.map((f) => f.p25_dias), backgroundColor: "#9fc5b9" },
+      { label: "Mediana", data: filas.map((f) => f.mediana_dias), backgroundColor: "#0f6e5c" },
+      { label: "P75", data: filas.map((f) => f.p75_dias), backgroundColor: "#5a9b88" }] },
+    options: { plugins: { title: { display: true, text: "Días para vencer: P25 · mediana · P75" } } } });
+  tabla("tb-inv", filas, [["nivel", "Nivel"], ["lotes", "Lotes"], ["unidades", "Unidades", num], ["media_dias", "Media días", (v) => num(v, 1)],
+    ["mediana_dias", "Mediana", (v) => num(v, 1)], ["desviacion_dias", "Desv. est.", (v) => num(v, 1)], ["min_dias", "Mín"], ["max_dias", "Máx"],
+    ["p25_dias", "P25", (v) => num(v, 1)], ["p75_dias", "P75", (v) => num(v, 1)], ["valor_cop", "Valor COP", cop]]);
+  sql("sql-inv", d.sql);
+}
+
+// ------------------------------------------------------------------ consulta 2: oferta INVIMA
+async function cargarOferta() {
+  const d = await api("/analitica/oferta-mercado");
+  const filas = d.filas, r = d.resumen || {};
+  kpis("kpis-oferta", [["Principios consultados", num(r.principios)], ["Presentaciones en el CUM", num(r.presentaciones_totales)],
+    ["Media por principio", num(r.media, 2)], ["Mediana", num(r.mediana, 1)], ["Desv. estándar", num(r.desviacion_estandar, 2)],
+    ["Mín / máx", `${num(r.minimo)} / ${num(r.maximo)}`]]);
+  grafico("ch-oferta", { type: "bar", data: { labels: filas.map((f) => f.principio_activo), datasets: [
+      { label: "Presentaciones registradas", data: filas.map((f) => f.presentaciones), backgroundColor: "#0f6e5c" },
+      { label: "Titulares distintos", data: filas.map((f) => f.titulares), backgroundColor: "#2f6db3" }] },
+    options: { indexAxis: "y", plugins: { title: { display: true, text: "Oferta en el INVIMA por principio activo" } } } });
+  tabla("tb-oferta", filas, [["principio_activo", "Principio activo"], ["presentaciones", "Presentaciones"], ["titulares", "Titulares"],
+    ["formas_farmaceuticas", "Formas"], ["forma_mas_comun", "Forma más común"], ["pct_registros_vigentes", "% vigentes", (v) => num(v, 1) + " %"]]);
+  $("origen-oferta").textContent = "Origen por principio: " + Object.entries(d.origenes || {}).map(([k, v]) => `${k}=${v}`).join(" · ");
+  sql("sql-oferta", d.sql);
+}
+
+// ------------------------------------------------------------------ consulta 3: cobertura regional
+async function cargarRegion() {
+  const d = await api("/analitica/cobertura-regional");
+  const filas = d.filas, r = d.resumen_divipola || {};
+  kpis("kpis-region", [["Departamentos (DIVIPOLA)", num(r.departamentos)], ["Municipios", num(r.municipios)],
+    ["Media municipios/depto.", num(r.media_municipios_por_departamento, 1)], ["Mediana", num(r.mediana, 1)],
+    ["Desv. estándar", num(r.desviacion_estandar, 1)], ["Mín / máx", `${num(r.minimo)} / ${num(r.maximo)}`]]);
+  const etiquetas = filas.map((f) => `${f.municipio} (${f.departamento})`);
+  grafico("ch-region", { type: "bar", data: { labels: etiquetas, datasets: [
+      { label: "Lotes en riesgo", data: filas.map((f) => f.lotes_en_riesgo), backgroundColor: COLORES.CRITICA, stack: "s" },
+      { label: "Otros lotes", data: filas.map((f) => f.lotes - f.lotes_en_riesgo), backgroundColor: "#9fc5b9", stack: "s" }] },
+    options: { scales: { x: { stacked: true }, y: { stacked: true } }, plugins: { title: { display: true, text: "Lotes por municipio del proveedor" } } } });
+  tabla("tb-region", filas, [["departamento", "Departamento"], ["municipio", "Municipio"], ["cod_municipio", "Cód. DANE"], ["proveedores", "Proveedores"],
+    ["lotes", "Lotes"], ["unidades", "Unidades", num], ["lotes_en_riesgo", "En riesgo"], ["pct_en_riesgo", "% riesgo", (v) => num(v, 1) + " %"]]);
+  $("origen-region").textContent = "Origen DIVIPOLA: " + (d.origen_divipola || "—");
+  sql("sql-region", d.sql);
+}
+
+// Restaura la sesión si el navegador la conserva.
+const t = leer("sitral_token");
+if (t) iniciarSesion(t, leer("sitral_rol"), leer("sitral_usuario"));
+</script>
+</body>
+</html>
