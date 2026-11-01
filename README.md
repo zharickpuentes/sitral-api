@@ -16,7 +16,7 @@ backoff exponencial**, y ofrece **analítica SQL con DuckDB** visualizada en un 
 |---|---|
 | **Integrantes** | Cristian Camilo Girata Ravelo · Gabriel Leonardo Nieves Bello · Zharick Yojana Puentes Rodríguez |
 | **Tutor** | Juan José Osorio Tabares |
-| **Video (inglés)** | _[pendiente: enlace de YouTube]_ |
+| **Video (inglés)** | https://youtu.be/KuO54yw3fBc_ |
 | **Documentación interactiva** | `http://127.0.0.1:8000/docs` (Swagger UI) con la API en ejecución |
 | **Dashboard analítico** | `http://127.0.0.1:8000/dashboard` |
 | **Decisiones de arquitectura** | [`docs/adr/`](docs/adr/README.md) (ADR en inglés) |
